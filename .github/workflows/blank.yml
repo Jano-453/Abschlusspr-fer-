@@ -1,11 +1,10 @@
 
-name: Build Android APK
+name: Build Daftar Hisabati APK
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -15,41 +14,276 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download project
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
+      - name: Install Android packages
+        run: |
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses
 
-      - name: Install Android platform
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Install Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Check project files
+      - name: Create Android project
         run: |
-          echo "Checking Android project..."
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
+          mkdir -p app/src/main/java/de/rsho/daftarhisabati
+          mkdir -p app/src/main/assets
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "DaftarHisabati"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.6.1" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+          }
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "de.rsho.daftarhisabati"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "de.rsho.daftarhisabati"
+                  minSdk = 23
+                  targetSdk = 28
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar"
+                  android:label="دفتر حساباتي"
+                  android:usesCleartextTraffic="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/de/rsho/daftarhisabati/MainActivity.kt <<'EOF'
+          package de.rsho.daftarhisabati
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.webkit.JavascriptInterface
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.content.ContentValues
+          import android.provider.MediaStore
+          import android.widget.Toast
+          import java.io.OutputStreamWriter
+
+          class MainActivity : Activity() {
+              private lateinit var web: WebView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  web = WebView(this)
+                  web.settings.javaScriptEnabled = true
+                  web.settings.domStorageEnabled = true
+                  web.webViewClient = WebViewClient()
+                  web.addJavascriptInterface(this, "AndroidApp")
+                  setContentView(web)
+                  web.loadUrl("file:///android_asset/index.html")
+              }
+
+              @JavascriptInterface
+              fun exportCsv(csv: String) {
+                  runOnUiThread {
+                      try {
+                          val values = ContentValues().apply {
+                              put(MediaStore.Downloads.DISPLAY_NAME, "Daftar-Hisabati.csv")
+                              put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                              put(MediaStore.Downloads.IS_PENDING, 1)
+                          }
+                          val uri = contentResolver.insert(
+                              MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                          )
+                          if (uri != null) {
+                              contentResolver.openOutputStream(uri)?.use { stream ->
+                                  OutputStreamWriter(stream, Charsets.UTF_8).use {
+                                      it.write("\uFEFF")
+                                      it.write(csv)
+                                  }
+                              }
+                              values.clear()
+                              values.put(MediaStore.Downloads.IS_PENDING, 0)
+                              contentResolver.update(uri, values, null, null)
+                              Toast.makeText(this, "تم حفظ النسخة في Downloads", Toast.LENGTH_LONG).show()
+                          }
+                      } catch (e: Exception) {
+                          Toast.makeText(this, "تعذر التصدير", Toast.LENGTH_LONG).show()
+                      }
+                  }
+              }
+
+              override fun onDestroy() {
+                  web.destroy()
+                  super.onDestroy()
+              }
+          }
+          EOF
+
+          cat > app/src/main/assets/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="ar" dir="rtl">
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>دفتر حساباتي</title>
+          <style>
+          *{box-sizing:border-box}
+          body{font-family:Arial,sans-serif;margin:0;background:#f3f5f7;color:#17202a}
+          header{background:#145a45;color:white;padding:18px;text-align:center}
+          main{padding:14px;max-width:850px;margin:auto}
+          .card{background:white;padding:15px;margin-bottom:14px;border-radius:12px;box-shadow:0 2px 8px #0001}
+          .balance{font-size:28px;font-weight:bold;color:#145a45}
+          input,select,button{width:100%;padding:12px;margin:5px 0;border:1px solid #ccd2d8;border-radius:8px;font-size:16px}
+          button{background:#145a45;color:white;border:0;font-weight:bold}
+          button.secondary{background:#e4eee9;color:#145a45}
+          .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+          .entry{border-bottom:1px solid #ddd;padding:10px 0}
+          .income{color:#13834b}.expense{color:#b42318}
+          small{color:#667085}
+          </style>
+          </head>
+          <body>
+          <header>
+          <h2 id="title">دفتر حساباتي</h2>
+          <button class="secondary" onclick="toggleLang()" id="lang">Deutsch</button>
+          </header>
+          <main>
+          <div class="card">
+          <small id="balanceLabel">الرصيد الحالي</small>
+          <div class="balance" id="balance">0.00 €</div>
+          <div class="row">
+          <div><small id="incomeLabel">إجمالي المداخيل</small><h3 id="totalIn">0.00 €</h3></div>
+          <div><small id="expenseLabel">إجمالي المسحوبات</small><h3 id="totalOut">0.00 €</h3></div>
+          </div>
+          </div>
+          <div class="card">
+          <h3 id="formTitle">إضافة حركة مالية</h3>
+          <input id="date" type="date">
+          <input id="description" placeholder="البيان أو الوصف">
+          <div class="row">
+          <select id="kind">
+          <option value="in">مدخول</option>
+          <option value="out">مسحوبات</option>
+          </select>
+          <select id="category">
+          <option value="variable">متحرك</option>
+          <option value="fixed">ثابت</option>
+          </select>
+          </div>
+          <input id="amount" type="number" min="0.01" step="0.01" placeholder="المبلغ باليورو">
+          <button onclick="addEntry()" id="addBtn">إضافة الحركة</button>
+          <button class="secondary" onclick="exportData()" id="exportBtn">تصدير نسخة Excel (CSV)</button>
+          </div>
+          <div class="card">
+          <h3 id="listTitle">الحركات المالية</h3>
+          <div id="entries"></div>
+          <button class="secondary" onclick="closeAccount()" id="closeBtn">إقفال الحساب وعرض الرصيد</button>
+          <p id="closing"></p>
+          </div>
+          </main>
+          <script>
+          const words={
+          ar:{title:"دفتر حساباتي",balance:"الرصيد الحالي",income:"إجمالي المداخيل",expense:"إجمالي المسحوبات",form:"إضافة حركة مالية",desc:"البيان أو الوصف",in:"مدخول",out:"مسحوبات",fixed:"ثابت",variable:"متحرك",add:"إضافة الحركة",export:"تصدير نسخة Excel (CSV)",list:"الحركات المالية",close:"إقفال الحساب وعرض الرصيد",lang:"Deutsch",date:"التاريخ",empty:"لا توجد حركات بعد",bad:"أدخل وصفاً ومبلغاً صحيحاً",saved:"تم إقفال الحساب. الرصيد: ",deleted:"حذف"},
+          de:{title:"Mein Kassenbuch",balance:"Aktueller Saldo",income:"Einnahmen gesamt",expense:"Entnahmen gesamt",form:"Buchung hinzufügen",desc:"Beschreibung",in:"Einnahme",out:"Entnahme",fixed:"Fest",variable:"Variabel",add:"Buchung hinzufügen",export:"Excel-Export (CSV)",list:"Buchungen",close:"Abschluss und Saldo anzeigen",lang:"العربية",date:"Datum",empty:"Noch keine Buchungen",bad:"Beschreibung und gültigen Betrag eingeben",saved:"Abschluss. Saldo: ",deleted:"Löschen"}
+          };
+          let lang=localStorage.getItem("lang")||"ar";
+          let data=JSON.parse(localStorage.getItem("entries")||"[]");
+          const $=id=>document.getElementById(id);
+          function t(key){return words[lang][key]}
+          function toggleLang(){lang=lang==="ar"?"de":"ar";localStorage.setItem("lang",lang);render()}
+          function render(){
+            document.documentElement.lang=lang;document.documentElement.dir=lang==="ar"?"rtl":"ltr";
+            $("title").textContent=t("title");$("balanceLabel").textContent=t("balance");
+            $("incomeLabel").textContent=t("income");$("expenseLabel").textContent=t("expense");
+            $("formTitle").textContent=t("form");$("description").placeholder=t("desc");
+            $("kind").options[0].text=t("in");$("kind").options[1].text=t("out");
+            $("category").options[0].text=t("variable");$("category").options[1].text=t("fixed");
+            $("addBtn").textContent=t("add");$("exportBtn").textContent=t("export");
+            $("listTitle").textContent=t("list");$("closeBtn").textContent=t("close");$("lang").textContent=t("lang");
+            let inc=data.filter(x=>x.kind==="in").reduce((a,x)=>a+x.amount,0);
+            let out=data.filter(x=>x.kind==="out").reduce((a,x)=>a+x.amount,0);
+            $("balance").textContent=(inc-out).toFixed(2)+" €";
+            $("totalIn").textContent=inc.toFixed(2)+" €";$("totalOut").textContent=out.toFixed(2)+" €";
+            $("entries").innerHTML=data.length?data.slice().reverse().map(x=>`<div class="entry"><b class="${x.kind==="in"?"income":"expense"}">${x.kind==="in"?"+":"−"}${x.amount.toFixed(2)} €</b><br>${escapeHtml(x.description)}<br><small>${x.date} · ${t(x.category)} · ${t(x.kind)}</small><button class="secondary" onclick="removeEntry('${x.id}')">${t("deleted")}</button></div>`).join(""):`<small>${t("empty")}</small>`;
+          }
+          function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+          function persist(){localStorage.setItem("entries",JSON.stringify(data));render()}
+          function addEntry(){
+            let description=$("description").value.trim(),amount=Number($("amount").value);
+            if(!description||!Number.isFinite(amount)||amount<=0){alert(t("bad"));return}
+            data.push({id:String(Date.now())+Math.random(),date:$("date").value||new Date().toISOString().slice(0,10),description,amount,kind:$("kind").value,category:$("category").value});
+            $("description").value="";$("amount").value="";persist();
+          }
+          function removeEntry(id){data=data.filter(x=>x.id!==id);persist()}
+          function closeAccount(){$("closing").textContent=t("saved")+$("balance").textContent}
+          function exportData(){
+            const rows=[[t("date"),t("desc"),t("kind"),t("category"),"EUR"]];
+            data.forEach(x=>rows.push([x.date,x.description,t(x.kind),t(x.category),x.amount.toFixed(2)]));
+            const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(";")).join("\r\n");
+            if(window.AndroidApp)AndroidApp.exportCsv(csv);
+            else {let a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"}));a.download="Daftar-Hisabati.csv";a.click();URL.revokeObjectURL(a.href)}
+          }
+          $("date").value=new Date().toISOString().slice(0,10);
+          render();
+          </script>
+          </body>
+          </html>
+          EOF
 
       - name: Build APK
         run: gradle assembleDebug
 
-      - name: Save APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: daftar-hisabati-apk
