@@ -4,48 +4,54 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
+      - name: Download project
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Install Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install Android platform
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Set up Gradle
+      - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Prepare Android source files
+      - name: Check project files
         run: |
-          mkdir -p app/src/main/java/de/rsho/daftarhisabati
-          if [ -f AndroidManifest.xml ]; then
-            mv AndroidManifest.xml app/src/main/AndroidManifest.xml
-          fi
-          if [ -f MainActivity.kt ]; then
-            mv MainActivity.kt app/src/main/java/de/rsho/daftarhisabati/MainActivity.kt
-          fi
+          echo "Checking Android project..."
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
 
       - name: Build APK
         run: gradle assembleDebug
 
-      - name: Upload APK
+      - name: Save APK
         uses: actions/upload-artifact@v4
         with:
           name: daftar-hisabati-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
